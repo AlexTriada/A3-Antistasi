@@ -1,63 +1,136 @@
-private ["_typeX","_costs","_groupX","_unit","_radiusX","_roads","_road","_pos","_truckX","_textX","_mrk","_hr","_exists","_positionTel","_isRoad","_typeGroup","_resourcesFIA","_hrFIA"];
+/* -------------------------------------------------------------------------- */
+/*                                   defines                                  */
+/* -------------------------------------------------------------------------- */
 
-if (["outpostsFIA"] call BIS_fnc_taskExists) exitWith {["Outposts/Roadblocks", "We can only deploy / delete one Observation Post or Roadblock at a time."] call A3A_fnc_customHint;};
-if (!([player] call A3A_fnc_hasRadio)) exitWith {if !(hasIFA) then {["Radio Required", "You need a radio in your inventory to be able to give orders to other squads"] call A3A_fnc_customHint;} else {["Radio-man Required", "You need a Radio Man in your group to be able to give orders to other squads"] call A3A_fnc_customHint;}};
+// TODO localisation
+#define POST_TITLE "Outposts/Roadblocks"
+#define ONLY_ONE_TEXT "We can only deploy / delete one Observation Post or Roadblock at a time."
+#define MAN_REQ_TITLE "Radio-man Required"
+#define MAN_REQ_TEXT "You need a Radio Man in your group to be able to give orders to other squads"
+#define RADIO_TITLE "Radio Required"
+#define RADIO_TEXT "You need a radio in your inventory to be able to give orders to other squads"
+#define DEPLOY_TEXT "Click on the position you wish to build the Observation Post or Roadblock. <br/><br/> Remember: to build Roadblocks you must click exactly on a road map section"
+#define DELETE_TEXT "Click on the Observation Post or Roadblock to delete."
+#define NO_POST_TEXT "No Posts or Roadblocks deployed to delete"
+#define CANNOT_TEXT "You cannot delete a Post while enemies are near it"
+#define NO_POST_TEXT "No post nearby"
+#define LACK_OF_RESURCES_TEXT "You lack of resources to build this Outpost or Roadblock <br/><br/> %1 HR and %2 € needed"
 
-_typeX = _this select 0;
+/* -------------------------------------------------------------------------- */
+/*                                    start                                   */
+/* -------------------------------------------------------------------------- */
 
-if (!visibleMap) then {openMap true};
+if (["outpostsFIA"] call BIS_fnc_taskExists)
+exitWith { [POST_TITLE, ONLY_ONE_TEXT] call A3A_fnc_customHint; };
+
+if !([player] call A3A_fnc_hasRadio)
+exitWith
+{
+	if (hasIFA)
+	then { [MAN_REQ_TITLE, MAN_REQ_TEXT] call A3A_fnc_customHint; }
+	else { [RADIO_TITLE, RADIO_TEXT] call A3A_fnc_customHint; };
+};
+
+/* ------------------------------ input params ------------------------------ */
+
+private _typeX = param [0];
+
+/* ----------------------------------- map ---------------------------------- */
+
+if !(visibleMap) then { openMap true; };
+
 positionTel = [];
-if (_typeX != "delete") then {["Outposts/Roadblocks", "Click on the position you wish to build the Observation Post or Roadblock. <br/><br/> Remember: to build Roadblocks you must click exactly on a road map section"] call A3A_fnc_customHint;} else {["Outposts/Roadblocks", "Click on the Observation Post or Roadblock to delete."] call A3A_fnc_customHint;};
 
-onMapSingleClick "positionTel = _pos;";
+if (_typeX != "delete")
+then { [POST_TITLE, DEPLOY_TEXT] call A3A_fnc_customHint; }
+else { [POST_TITLE, DELETE_TEXT] call A3A_fnc_customHint; };
 
-waitUntil {sleep 1; (count positionTel > 0) or (not visiblemap)};
-onMapSingleClick "";
+onMapSingleClick "positionTel = _pos; onMapSingleClick ''; true";
 
-if (!visibleMap) exitWith {};
+waitUntil
+{
+	sleep 1;
 
-_positionTel = positionTel;
-_pos = [];
+	if (count positionTel > 0) exitWith { true };
+	if !(visiblemap) exitWith { true };
 
-if ((_typeX == "delete") and (count outpostsFIA < 1)) exitWith {["Outposts/Roadblocks", "No Posts or Roadblocks deployed to delete"] call A3A_fnc_customHint;};
-if ((_typeX == "delete") and ({(alive _x) and (!captive _x) and ((side _x == Occupants) or (side _x == Invaders)) and (_x distance _positionTel < 500)} count allUnits > 0)) exitWith {["Outposts/Roadblocks", "You cannot delete a Post while enemies are near it"] call A3A_fnc_customHint;};
+	false
+};
 
-_costs = 0;
-_hr = 0;
+if !(visibleMap) exitWith {};
 
-if (_typeX != "delete") then
+private _positionTel = positionTel;
+
+/* ---------------------------- check conditions ---------------------------- */
+
+if (_typeX == "delete" && { count outpostsFIA < 1 })
+exitWith { [POST_TITLE, NO_POST_TEXT] call A3A_fnc_customHint; };
+
+if (_typeX == "delete" && {
+	allUnits findIf
 	{
-	_isRoad = isOnRoad _positionTel;
+		alive _x && {
+		!captive _x && {
+		_x distance _positionTel < 500 && {
+		side _x == Occupants || {
+		side _x == Invaders }}}}
+	} != -1 })
+exitWith { [POST_TITLE, CANNOT_TEXT] call A3A_fnc_customHint;};
 
-	_typeGroup = groupsSDKSniper;
+/* ----------------------------- process actions ---------------------------- */
 
-	if (_isRoad) then
-		{
+private _costs = 0;
+private _hr = 0;
+private _nearestPosition = [];
+
+if (_typeX != "delete")
+then
+{
+	private _isOnRoad = isOnRoad _positionTel;
+	private _typeGroup = groupsSDKSniper;
+
+	if (_isOnRoad)
+	then
+	{
 		_typeGroup = groupsSDKAT;
-		_costs = _costs + ([vehSDKLightArmed] call A3A_fnc_vehiclePrice) + (server getVariable staticCrewTeamPlayer);
+
+		_costs = _costs + ([vehSDKLightArmed] call A3A_fnc_vehiclePrice) +
+			(server getVariable staticCrewTeamPlayer);
+
 		_hr = _hr + 1;
-		};
+	};
 
-	//_formatX = (configfile >> "CfgGroups" >> "teamPlayer" >> "Guerilla" >> "Infantry" >> _typeGroup);
-	//_unitsX = [_formatX] call groupComposition;
-	{_costs = _costs + (server getVariable (_x select 0)); _hr = _hr +1} forEach _typeGroup;
-	}
+	{
+		_costs = _costs + (server getVariable (_x # 0));
+		_hr = _hr + 1;
+	} forEach _typeGroup;
+}
 else
-	{
-	_mrk = [outpostsFIA,_positionTel] call BIS_fnc_nearestPosition;
-	_pos = getMarkerPos _mrk;
-	if (_positionTel distance _pos >10) exitWith {["Outposts/Roadblocks", "No post nearby"] call A3A_fnc_customHint;};
-	};
-//if ((_typeX == "delete") and (_positionTel distance _pos >10)) exitWith {hint "No post nearby"};
+{
+	private _mrk = [outpostsFIA, _positionTel] call BIS_fnc_nearestPosition;
 
-_resourcesFIA = server getVariable "resourcesFIA";
-_hrFIA = server getVariable "hr";
+	if (_mrk isEqualTo [0, 0, 0])
+	then { _nearestPosition = _mrk; }
+	else { _nearestPosition = getMarkerPos _mrk; };
 
-if (((_resourcesFIA < _costs) or (_hrFIA < _hr)) and (_typeX!= "delete")) exitWith {["Outposts/Roadblocks", format ["You lack of resources to build this Outpost or Roadblock <br/><br/> %1 HR and %2 € needed",_hr,_costs]] call A3A_fnc_customHint;};
 
-if (_typeX != "delete") then
-	{
-	[-_hr,-_costs] remoteExec ["A3A_fnc_resourcesFIA",2];
-	};
+	if (_positionTel distance _nearestPosition > 10)
+	exitWith { [POST_TITLE, NO_POST_TEXT] call A3A_fnc_customHint; };
+};
 
- [_typeX,_positionTel] remoteExec ["A3A_fnc_createOutpostsFIA", 2];
+private _resourcesFIA = server getVariable "resourcesFIA";
+private _hrFIA = server getVariable "hr";
+
+if (_typeX != "delete"
+	&& { _resourcesFIA < _costs
+	|| { _hrFIA < _hr } })
+exitWith
+{
+	[POST_TITLE, format [LACK_OF_RESURCES_TEXT, _hr, _costs]]
+		call A3A_fnc_customHint;
+};
+
+if (_typeX != "delete")
+then { [- _hr, - _costs] remoteExec ["A3A_fnc_resourcesFIA", 2]; };
+
+[_typeX, _positionTel] remoteExec ["A3A_fnc_createOutpostsFIA", 2];
