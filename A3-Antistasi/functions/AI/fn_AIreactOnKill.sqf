@@ -1,88 +1,115 @@
-private ["_groupX","_killer","_markerX","_super","_enemy"];
-_groupX = _this select 0;
-_killer = _this select 1;
+/* -------------------------------------------------------------------------- */
+/*                                   defines                                  */
+/* -------------------------------------------------------------------------- */
 
-{
-if (fleeing _x) then
+#define SURRENDER_DISTANCE 50
+
+/* -------------------------------------------------------------------------- */
+/*                              local procedures                              */
+/* -------------------------------------------------------------------------- */
+
+private _fleeing = {
+
+	params ["_unit", "_enemy"];
+
+	if (isNull _enemy) exitWith {};
+
+	if (_unit distance _enemy < SURRENDER_DISTANCE
+		&& { vehicle _unit == _unit })
+	then
 	{
-	if ([_x] call A3A_fnc_canFight) then
+		[_unit] spawn A3A_fnc_surrenderAction;
+	}
+	else
+	{
+		if (_unit == leader _groupX)
+		then
 		{
-		_enemy = _x findNearestEnemy _x;
-		if (!isNull _enemy) then
+			private _marker = (leader _groupX) getVariable "markerX";
+			private _super = !(isNil "_marker") && { _marker in airportsX };
+
+			if (vehicle _killer == _killer)
+			then
 			{
-			if ((_x distance _enemy < 50) and (vehicle _x == _x)) then
-				{
-				[_x] spawn A3A_fnc_surrenderAction;
-				}
+				[getPosASL _enemy, side _unit, "Normal", _super]
+					remoteExec ["A3A_fnc_patrolCA", 2];
+			}
 			else
-				{
-				if (_x == leader group _x) then
-					{
-					_super = false;
-					_markerX = (leader _groupX) getVariable "markerX";
-					if (!isNil "_markerX") then
-						{
-						if (_markerX in airportsX) then {_super = true};
-						};
-					if (vehicle _killer == _killer) then
-						{
-						[getPosASL _enemy,side _x,"Normal",_super] remoteExec ["A3A_fnc_patrolCA", 2];
-						}
-					else
-						{
-						private _attackType = "Normal";
-						if (vehicle _killer isKindOf "Air") then {_attackType = "Air"};
-						if (vehicle _killer isKindof "Tank") then {_attackType = "Tank"};
-						[getPosASL _enemy,side _x,_attackType,_super] remoteExec ["A3A_fnc_patrolCA", 2];
-						};
-					};
-				if (([primaryWeapon _x] call BIS_fnc_baseWeapon) in allMachineGuns) then {[_x,_enemy] call A3A_fnc_suppressingFire} else {[_x,_x,_enemy] spawn A3A_fnc_chargeWithSmoke};
-				};
+			{
+				private _attackType = "Normal";
+
+				if (vehicle _killer isKindOf "Air")
+				then { _attackType = "Air"; };
+
+				if (vehicle _killer isKindof "Tank")
+				then { _attackType = "Tank"; };
+
+				[getPosASL _enemy, side _unit, _attackType, _super]
+					remoteExec ["A3A_fnc_patrolCA", 2];
 			};
 		};
-	}
-else
+
+		if (([primaryWeapon _unit] call BIS_fnc_baseWeapon) in allMachineGuns)
+		then { [_unit, _enemy] call A3A_fnc_suppressingFire; }
+		else { [_unit, _unit, _enemy] spawn A3A_fnc_chargeWithSmoke; };
+	};
+};
+
+private _notFleeing = {
+
+	params ["_unit", "_enemy"];
+
+	if (isNull _enemy)
+	then
 	{
-	if ([_x] call A3A_fnc_canFight) then
+		if (sunOrMoon < 1
+			&& { !haveNV
+			&& { hasIFA
+			&& { (typeOf _unit) in squadLeaders
+			|| { count (getArray (configfile >> "CfgWeapons" >>
+				primaryWeapon _unit >> "muzzles")) == 2 } }}})
+		then { [_unit] spawn A3A_fnc_useFlares; };
+	}
+	else
+	{
+		if (([primaryWeapon _unit] call BIS_fnc_baseWeapon) in allMachineGuns)
+		then
 		{
-		_enemy = _x findNearestEnemy _x;
-		if (!isNull _enemy) then
-			{
-			if (([primaryWeapon _x] call BIS_fnc_baseWeapon) in allMachineGuns) then
-				{
-				[_x,_enemy] call A3A_fnc_suppressingFire;
-				}
-			else
-				{
-				if (sunOrMoon == 1 or haveNV) then
-					{
-					[_x,_x,_enemy] spawn A3A_fnc_chargeWithSmoke;
-					}
-				else
-					{
-					if (sunOrMoon < 1) then
-						{
-						if ((hasIFA and (typeOf _x in squadLeaders)) or (count (getArray (configfile >> "CfgWeapons" >> primaryWeapon _x >> "muzzles")) == 2)) then
-							{
-							[_x,_enemy] spawn A3A_fnc_useFlares;
-							};
-						};
-					};
-				};
-			}
+			[_unit, _enemy] spawn A3A_fnc_suppressingFire;
+		}
 		else
+		{
+			if (sunOrMoon == 1 || { haveNV })
+			then
 			{
-			if ((sunOrMoon <1) and !haveNV) then
-				{
-				if ((hasIFA and (typeOf _x in squadLeaders)) or (count (getArray (configfile >> "CfgWeapons" >> primaryWeapon _x >> "muzzles")) == 2)) then
-					{
-					[_x] call A3A_fnc_useFlares;
-					};
-				};
+				[_unit, _unit, _enemy] spawn A3A_fnc_chargeWithSmoke;
+			}
+			else
+			{
+				if (hasIFA
+					&& { (typeOf _unit) in squadLeaders
+					|| { count (getArray (configfile >> "CfgWeapons" >>
+						primaryWeapon _unit >> "muzzles")) == 2 }})
+				then { [_unit, _enemy] spawn A3A_fnc_useFlares; };
 			};
-		if (random 1 < 0.5) then {if (count units _groupX > 0) then {_x allowFleeing (1 -(_x skill "courage") + (({!([_x] call A3A_fnc_canFight)} count units _groupX)/(count units _groupX)))}};
 		};
 	};
-sleep 1 + (random 1);
-} forEach units _groupX;
+}
 
+/* -------------------------------------------------------------------------- */
+/*                                    main                                    */
+/* -------------------------------------------------------------------------- */
+
+params ["_groupX", "_killer"];
+
+{
+	if ([_x] call A3A_fnc_canFight)
+	then
+	{
+		if (fleeing _x)
+		then { [_x, _x findNearestEnemy _x] call _fleeing; }
+		else { [_x, _x findNearestEnemy _x] call _notFleeing; };
+	};
+
+	sleep 1 + (random 1);
+} forEach (units _groupX);
