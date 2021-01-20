@@ -1,19 +1,29 @@
-private _morty = _this select 0;
-private _mortarX = vehicle _morty;
-if (_mortarX == _morty) exitWith {};
-if (!alive _mortarX) exitWith
-	{
-	(group _morty) setVariable ["mortarsX",objNull];
-	};
-if !(unitReady _morty) exitWith {};
-private _positionX = _this select 1;
-private _rounds = _this select 2;
-private _typeAmmunition = (getArray (configfile >> "CfgVehicles" >> (typeOf _mortarX) >> "Turrets" >> "MainTurret" >> "magazines")) select 0;
-if ({(_x select 0) == _typeAmmunition} count (magazinesAmmo _mortarX) == 0) exitWith
-	{
-	moveOut _morty;
-	(group _morty) setVariable ["mortarsX",objNull];
-	};
-if !(_positionX inRangeOfArtillery [[_mortarX], ((getArtilleryAmmo [_mortarX]) select 0)]) exitWith {};
+private _unit = param [0];
+private _mortar = vehicle _unit;
 
-_mortarX commandArtilleryFire [_positionX,_typeAmmunition,_rounds];
+if (_mortar == _unit)
+exitWith {};
+
+if !(alive _mortar)
+exitWith { (group _unit) setVariable ["mortarsX", objNull]; };
+
+if !(unitReady _unit)
+exitWith {};
+
+private _position = param [1];
+private _rounds = param [2];
+private _config = configfile >> "CfgVehicles" >> (typeOf _mortar) >> "Turrets"
+	>> "MainTurret" >> "magazines";
+private _typeAmmunition = (getArray _config) # 0;
+
+if ((magazinesAmmo _mortar) findIf { _x # 0 == _typeAmmunition } == -1)
+exitWith
+{
+	moveOut _unit;
+	(group _unit) setVariable ["mortarsX", objNull];
+};
+
+if !(_position inRangeOfArtillery [[_mortar], (getArtilleryAmmo [_mortar]) # 0])
+exitWith {};
+
+_mortar commandArtilleryFire [_position, _typeAmmunition, _rounds];
