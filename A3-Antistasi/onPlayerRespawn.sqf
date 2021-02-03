@@ -1,248 +1,290 @@
 if (isDedicated) exitWith {};
-private ["_newUnit","_oldUnit"];
-_newUnit = _this select 0;
-_oldUnit = _this select 1;
+
+private _oldUnit = param [1];
 
 if (isNull _oldUnit) exitWith {};
 
-waitUntil {alive player};
+private _newUnit = param [0];
 
-//When LAN hosting, Bohemia's Zeus module code will cause the player lose Zeus access if the body is deleted after respawning.
-//This is a workaround that re-assigns curator to the player if their body is deleted.
-//It will only run on LAN hosted MP, where the hoster is *always* admin, so we shouldn't run into any issues.
-if (isServer) then {
-	_oldUnit addEventHandler ["Deleted", {
-		[] spawn {
-			sleep 1;		// should ensure that the bug unassigns first
-			{ player assignCurator _x } forEach allCurators;
-		}
-	} ];
+waitUntil { sleep 0.1; alive player };
+
+/* -------------------------------------------------------------------------- */
+/*                                   defines                                  */
+/* -------------------------------------------------------------------------- */
+
+#define GLOBAL 0
+#define SERVER 2
+#define FIRED_DIST 300
+#define UNKNOWN 1.4
+#define SIZE_MULT 1.5
+// TODO localize
+#define TITLE "Static Deployed"
+#define TEXT_HINT1 "Static weapon has been deployed for use in a nearby zone, and will be used by garrison militia if you leave it here the next time the zone spawns"
+#define REMOTE_TITLE "Remote AI"
+#define REMOTE_TEXT "Died while remote controlling AI"
+
+/* -------------------------------------------------------------------------- */
+/*                               event handlers                               */
+/* -------------------------------------------------------------------------- */
+
+// When LAN hosting, Bohemia's Zeus module code will cause the player lose Zeus
+// access if the body is deleted after respawning. This is a workaround that
+// re-assigns curator to the player if their body is deleted. It will only run
+// on LAN hosted MP, where the hoster is *always* admin, so we shouldn't run
+// into any issues.
+private _eh_deleted =
+{
+	[] spawn
+	{
+		// should ensure that the bug unassigns first
+		sleep 1;
+		{ player assignCurator _x; } forEach allCurators;
+	};
 };
 
-_nul = [_oldUnit] spawn A3A_fnc_postmortem;
-
-_oldUnit setVariable ["incapacitated",false,true];
-_newUnit setVariable ["incapacitated",false,true];
-
-if (side group player == teamPlayer) then
+private _eh_fired =
+{
+	_this spawn
 	{
-	_owner = _oldUnit getVariable ["owner",_oldUnit];
+		private _unit = param [0];
 
-	if (_owner != _oldUnit) exitWith {["Remote AI", "Died while remote controlling AI"] call A3A_fnc_customHint; selectPlayer _owner; disableUserInput false; deleteVehicle _newUnit};
+		if !(captive _unit) exitWith {};
 
-	_nul = [0,-1,getPos _oldUnit] remoteExec ["A3A_fnc_citySupportChange",2];
+		if (allUnits findIf { (side _x) in [Occupants, Invaders]
+				&& { _x distance player < FIRED_DIST }} != -1)
+		then
+		{
+			[_unit, false] remoteExec ["setCaptive", GLOBAL, _unit];
+		}
+		else
+		{
+			private _city = [citiesX, _unit] call BIS_fnc_nearestPosition;
+			private _size = [_city] call A3A_fnc_sizeMarker;
+			private _data = server getVariable _city;
 
-	_score = _oldUnit getVariable ["score",0];
-	_punish = _oldUnit getVariable ["punish",0];
-	_moneyX = _oldUnit getVariable ["moneyX",0];
+			if (random 100 >= _data # 2) exitWith {};
+			if (_unit distance (getMarkerPos _city) >= _size * SIZE_MULT)
+			exitWith {};
+
+			private _vehicle = vehicle _unit;
+
+			if (_vehicle == _unit)
+			exitWith { [_unit, false] remoteExec ["setCaptive", GLOBAL, _unit]; };
+
+			private _vehUnits = assignedCargo _vehicle + crew _vehicle;
+
+			{
+				if (isPlayer _x)
+				then { [_x, false] remoteExec ["setCaptive", GLOBAL, _x]; };
+			} forEach _vehUnits;
+		};
+	};
+};
+
+private _eh_inventoryOpened =
+{
+	_this spawn
+	{
+		private _playerX = param [0];
+
+		if !(captive _playerX) exitWith {};
+
+		private _containerX = param [1];
+		private _typeX = typeOf _containerX;
+
+		if !(_containerX isKindOf "CAManBase"
+			&& { !(alive _containerX)
+			|| { _typeX in [NATOAmmoBox, CSATAmmoBox] }}) exitWith {};
+
+		if (allUnits findIf { (side _x) in  [Invaders, Occupants]
+				&& { _x knowsAbout _playerX > UNKNOWN }} != -1)
+		then
+		{
+			[_playerX, false] remoteExec ["setCaptive", GLOBAL, _playerX];
+		}
+		else
+		{
+			private _city = [citiesX, _playerX] call BIS_fnc_nearestPosition;
+			private _size = [_city] call A3A_fnc_sizeMarker;
+			private _dataX = server getVariable _city;
+
+			if (random 100 >= _dataX # 2) exitWith {};
+			if (_playerX distance (getMarkerPos _city) >= _size * SIZE_MULT)
+			exitWith {};
+
+			[_playerX, false] remoteExec ["setCaptive", GLOBAL, _playerX];
+		};
+	};
+
+	false
+};
+
+private _eh_handleHeal =
+{
+	_this spawn
+	{
+		private _player = param [0];
+
+		if !(captive _player) exitWith {};
+
+		if (allUnits findIf { (side _x) in [Invaders, Occupants]
+				&& { _x knowsAbout player > UNKNOWN }} != -1)
+		then
+		{
+			[_player, false] remoteExec ["setCaptive", GLOBAL, _player];
+		}
+		else
+		{
+			private _city = [citiesX, _player] call BIS_fnc_nearestPosition;
+			private _size = [_city] call A3A_fnc_sizeMarker;
+			private _dataX = server getVariable _city;
+
+			if (random 100 >= _dataX # 2) exitWith {};
+			if (_player distance (getMarkerPos _city) >= _size * SIZE_MULT)
+			exitWith {};
+
+			[_player, false] remoteExec ["setCaptive", GLOBAL, _player];
+		};
+	};
+};
+
+private _eh_weaponAssembled =
+{
+	_this spawn
+	{
+		private _veh = param [1];
+		[_veh, teamPlayer] call A3A_fnc_AIVEHinit;
+
+		if !(_veh isKindOf "StaticWeapon") exitWith {};
+
+		if !(_veh in staticsToSave)
+		then
+		{
+			staticsToSave pushBack _veh;
+			publicVariable "staticsToSave";
+		};
+
+		_markersX = markersX select
+			{ sidesX getVariable [_x, sideUnknown] == teamPlayer };
+		_pos = position _veh;
+
+		if (_markersX findIf { _pos inArea _x } != -1)
+		then { [TITLE, TEXT_HINT1] call A3A_fnc_customHint; };
+	};
+};
+
+private _eh_weaponDisassembled =
+{
+	[param [1]] remoteExec ["A3A_fnc_postmortem", SERVER];
+	[param [2]] remoteExec ["A3A_fnc_postmortem", SERVER];
+};
+/* -------------------------------------------------------------------------- */
+/*                                    start                                   */
+/* -------------------------------------------------------------------------- */
+
+if (isServer)
+then { _oldUnit addEventHandler ["Deleted", _eh_deleted]; };
+
+[_oldUnit] spawn A3A_fnc_postmortem;
+
+_oldUnit setVariable ["incapacitated", false, true];
+_newUnit setVariable ["incapacitated", false, true];
+
+if (side (group player) == teamPlayer)
+then
+{
+	_owner = _oldUnit getVariable ["owner", _oldUnit];
+
+	if (_owner != _oldUnit)
+	exitWith
+	{
+		[REMOTE_TITLE, REMOTE_TEXT] call A3A_fnc_customHint;
+		selectPlayer _owner;
+		disableUserInput false;
+		deleteVehicle _newUnit;
+	};
+
+	[0, -1, getPos _oldUnit] remoteExec ["A3A_fnc_citySupportChange", SERVER];
+
+	private _score = _oldUnit getVariable ["score", 0];
+	private _punish = _oldUnit getVariable ["punish", 0];
+	private _moneyX = _oldUnit getVariable ["moneyX", 0];
 	_moneyX = round (_moneyX - (_moneyX * 0.15));
-	_eligible = _oldUnit getVariable ["eligible",true];
-	_rankX = _oldUnit getVariable ["rankX","PRIVATE"];
+	private _eligible = _oldUnit getVariable ["eligible", true];
+	private _rankX = _oldUnit getVariable ["rankX", "PRIVATE"];
 
-	if (_moneyX < 0) then {_moneyX = 0};
+	if (_moneyX < 0) then { _moneyX = 0; };
 
-	_newUnit setVariable ["score",_score -1,true];
-	_newUnit setVariable ["owner",_newUnit,true];
-	_newUnit setVariable ["punish",_punish,true];
-	_newUnit setVariable ["respawning",false];
-	_newUnit setVariable ["moneyX",_moneyX,true];
-	//_newUnit setUnitRank (rank _oldUnit);
-	_newUnit setVariable ["compromised",0];
-	_newUnit setVariable ["eligible",_eligible,true];
-	_oldUnit setVariable ["eligible",false,true];
-	_newUnit setVariable ["spawner",true,true];
-	_oldUnit setVariable ["spawner",nil,true];
-	[_newUnit,false] remoteExec ["setCaptive",0,_newUnit];
+	_newUnit setVariable ["score", _score - 1, true];
+	_newUnit setVariable ["owner", _newUnit, true];
+	_newUnit setVariable ["punish", _punish, true];
+	_newUnit setVariable ["respawning", false];
+	_newUnit setVariable ["moneyX", _moneyX, true];
+	_newUnit setVariable ["compromised", 0];
+	_newUnit setVariable ["eligible", _eligible, true];
+	_oldUnit setVariable ["eligible", false, true];
+	_newUnit setVariable ["spawner", true, true];
+	_oldUnit setVariable ["spawner", nil, true];
+	[_newUnit, false] remoteExec ["setCaptive", GLOBAL, _newUnit];
 	_newUnit setCaptive false;
 	_newUnit setRank (_rankX);
-	_newUnit setVariable ["rankX",_rankX,true];
-	_newUnit setUnitTrait ["camouflageCoef",0.8];
-	_newUnit setUnitTrait ["audibleCoef",0.8];
+	_newUnit setVariable ["rankX", _rankX, true];
+	_newUnit setUnitTrait ["camouflageCoef", 0.8];
+	_newUnit setUnitTrait ["audibleCoef", 0.8];
+
+	{ _newUnit addOwnedMine _x; } count getAllOwnedMines (_oldUnit);
+
 	{
-    _newUnit addOwnedMine _x;
-    } count (getAllOwnedMines (_oldUnit));
-	{
-		if (_x getVariable ["owner", ObjNull] == _oldUnit) then {
-			_x setVariable ["owner", _newUnit, true];
-		};
+		if (_x getVariable ["owner", ObjNull] == _oldUnit)
+		then { _x setVariable ["owner", _newUnit, true]; };
 	} forEach (units group player);
 
-
-	// don't reinit revive because damage handlers are respawn-persistent
-	//if (!hasACEMedical) then {[_newUnit] call A3A_fnc_initRevive};
 	disableUserInput false;
-	//_newUnit enableSimulation true;
-	if (_oldUnit == theBoss) then
-		{
-		[_newUnit, true] remoteExec ["A3A_fnc_theBossTransfer", 2];
-		};
+
+	if (_oldUnit == theBoss)
+	then { [_newUnit, true] remoteExec ["A3A_fnc_theBossTransfer", SERVER]; };
 
 
 	removeAllItemsWithMagazines _newUnit;
-	{_newUnit removeWeaponGlobal _x} forEach weapons _newUnit;
+
+	{ _newUnit removeWeaponGlobal _x; } forEach weapons _newUnit;
+
 	removeBackpackGlobal _newUnit;
 	removeVest _newUnit;
 	removeAllAssignedItems _newUnit;
-	//Give them a map, in case they're commander and need to replace petros.
-	_newUnit linkItem "ItemMap";
-	if (!isPlayer (leader group player)) then {(group player) selectLeader player};
-	player addEventHandler ["FIRED",
-		{
-		_player = _this select 0;
-		if (captive _player) then
-			{
-			if ({if (((side _x == Occupants) or (side _x == Invaders)) and (_x distance player < 300)) exitWith {1}} count allUnits > 0) then
-				{
-				[_player,false] remoteExec ["setCaptive",0,_player];
-				_player setCaptive false;
-				}
-			else
-				{
-				_city = [citiesX,_player] call BIS_fnc_nearestPosition;
-				_size = [_city] call A3A_fnc_sizeMarker;
-				_dataX = server getVariable _city;
-				if (random 100 < _dataX select 2) then
-					{
-					if (_player distance getMarkerPos _city < _size * 1.5) then
-						{
-						[_player,false] remoteExec ["setCaptive",0,_player];
-						_player setCaptive false;
-						if (vehicle _player != _player) then
-							{
-							{if (isPlayer _x) then {[_x,false] remoteExec ["setCaptive",0,_x]; _x setCaptive false}} forEach ((assignedCargo (vehicle _player)) + (crew (vehicle _player)) - [_player]);
-							};
-						};
-					};
-				};
-			}
-		}
-		];
 
-	player addEventHandler ["InventoryOpened",
-		{
-		private ["_playerX","_containerX","_typeX"];
-		_control = false;
-		_playerX = _this select 0;
-		if (captive _playerX) then
-			{
-			_containerX = _this select 1;
-			_typeX = typeOf _containerX;
-			if (((_containerX isKindOf "CAManBase") and (!alive _containerX)) or (_typeX == NATOAmmoBox) or (_typeX == CSATAmmoBox)) then
-				{
-				if ({if (((side _x== Invaders) or (side _x== Occupants)) and (_x knowsAbout _playerX > 1.4)) exitWith {1}} count allUnits > 0) then
-					{
-					[_playerX,false] remoteExec ["setCaptive",0,_playerX];
-					_playerX setCaptive false;
-					}
-				else
-					{
-					_city = [citiesX,_playerX] call BIS_fnc_nearestPosition;
-					_size = [_city] call A3A_fnc_sizeMarker;
-					_dataX = server getVariable _city;
-					if (random 100 < _dataX select 2) then
-						{
-						if (_playerX distance getMarkerPos _city < _size * 1.5) then
-							{
-							[_playerX,false] remoteExec ["setCaptive",0,_playerX];
-							_playerX setCaptive false;
-							};
-						};
-					};
-				};
-			};
-		_control
-		}];
-	/*
-	player addEventHandler ["InventoryClosed",
-		{
-		_control = false;
-		_uniform = uniform player;
-		_typeSoldier = getText (configfile >> "CfgWeapons" >> _uniform >> "ItemInfo" >> "uniformClass");
-		_sideType = getNumber (configfile >> "CfgVehicles" >> _typeSoldier >> "side");
-		if ((_sideType == 1) or (_sideType == 0) and (_uniform != "")) then
-			{
-			if !(player getVariable ["disguised",false]) then
-				{
-				hint "You are wearing an enemy uniform, this will make the AI attack you. Beware!";
-				player setVariable ["disguised",true];
-				player addRating (-1*(2001 + rating player));
-				};
-			}
-		else
-			{
-			if (player getVariable ["disguised",false]) then
-				{
-				hint "You removed your enemy uniform";
-				player addRating (rating player * -1);
-				};
-			};
-		_control
-		}];
-		*/
-	if (hasInterface) then {
+	_newUnit linkItem "ItemMap";
+
+	if !(isPlayer (leader group player))
+	then { (group player) selectLeader player; };
+
+	player addEventHandler ["FIRED", _eh_fired];
+
+	player addEventHandler ["InventoryOpened", _eh_inventoryOpened];
+
+	if (hasInterface)
+	then
+	{
 		[player] call A3A_fnc_punishment_FF_addEH;
 		[] spawn A3A_fnc_outOfBounds;
 	};
-	player addEventHandler ["HandleHeal",
-		{
-		_player = _this select 0;
-		if (captive _player) then
-			{
-			if ({((side _x== Invaders) or (side _x== Occupants)) and (_x knowsAbout player > 1.4)} count allUnits > 0) then
-				{
-				[_player,false] remoteExec ["setCaptive",0,_player];
-				_player setCaptive false;
-				}
-			else
-				{
-				_city = [citiesX,_player] call BIS_fnc_nearestPosition;
-				_size = [_city] call A3A_fnc_sizeMarker;
-				_dataX = server getVariable _city;
-				if (random 100 < _dataX select 2) then
-					{
-					if (_player distance getMarkerPos _city < _size * 1.5) then
-						{
-						[_player,false] remoteExec ["setCaptive",0,_player];
-						_player setCaptive false;
-						};
-					};
-				};
-			}
-		}
-		];
-	player addEventHandler ["WeaponAssembled",
-		{
-			private _veh = _this select 1;
-			[_veh, teamPlayer] call A3A_fnc_AIVEHinit;		// will flip/capture if already initialized
-			if (_veh isKindOf "StaticWeapon") then {
-				if (not(_veh in staticsToSave)) then {
-					staticsToSave pushBack _veh;
-					publicVariable "staticsToSave";
-				};
-				_markersX = markersX select {sidesX getVariable [_x,sideUnknown] == teamPlayer};
-				_pos = position _veh;
-				if (_markersX findIf {_pos inArea _x} != -1) then {["Static Deployed", "Static weapon has been deployed for use in a nearby zone, and will be used by garrison militia if you leave it here the next time the zone spawns"] call A3A_fnc_customHint;};
-			};
-		}];
-	player addEventHandler ["WeaponDisassembled",
-			{
-			_bag1 = _this select 1;
-			_bag2 = _this select 2;
-			//_bag1 = objectParent (_this select 1);
-			//_bag2 = objectParent (_this select 2);
-			[_bag1] remoteExec ["A3A_fnc_postmortem", 2];
-			[_bag2] remoteExec ["A3A_fnc_postmortem", 2];
-			}
-		];
+
+	player addEventHandler ["HandleHeal", _eh_handleHeal];
+	player addEventHandler ["WeaponAssembled", _eh_weaponAssembled];
+	player addEventHandler ["WeaponDisassembled", _eh_weaponDisassembled];
+
 	[true] spawn A3A_fnc_reinitY;
 	[player] execVM "OrgPlayers\unitTraits.sqf";
 	[] spawn A3A_fnc_statistics;
-	if (LootToCrateEnabled) then {call A3A_fnc_initLootToCrate};
-	}
+
+	if (LootToCrateEnabled) then { call A3A_fnc_initLootToCrate; };
+}
 else
-	{
-	_oldUnit setVariable ["spawner",nil,true];
-	_newUnit setVariable ["spawner",true,true];
+{
+	_oldUnit setVariable ["spawner", nil, true];
+	_newUnit setVariable ["spawner", true, true];
+
 	[player] call A3A_fnc_dress;
-	if (hasACE) then {[] call A3A_fnc_ACEpvpReDress};
-	};
+
+	if (hasACE) then { call A3A_fnc_ACEpvpReDress; };
+};
